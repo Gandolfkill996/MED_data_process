@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import datetime
 from collections import *
 import os
-
+import numpy as np
 
 
 # ----------------------------------------------------------------------
@@ -172,7 +172,6 @@ def get_vistis_intervals():
     No_regist_patient = []
     for i in range(len(visits_record)):
         record_id, site, redcap_event_name, visit_date,  month = visits_record.iloc[i]
-
         # In 5_Visit Dates table, some records' month missing unregular visit which is not included in calculation
         # Some records' month less than 0 means visit before initiate date which is not included in calculation
         # Some records' month is 0 refers initiate date. However, not all patients have initiate date record.
@@ -183,7 +182,9 @@ def get_vistis_intervals():
         # Make sure all scheduled visit happens after initiate date
         if days_diff(visits_ini_off[record_id]['init'], visit_date) < 0:
             continue
-
+        if np.isnan(month):
+            continue
+        month = int(month)
         # Remove unschedule visit
         event = str(redcap_event_name).strip().lower() if pd.notnull(redcap_event_name) else ""
         allowed_prefixes = ("form_", "month_", "quarter_", "visit_month_","hydroxyurea_initat_arm_","month_0_hu_initiat_arm_")
@@ -196,10 +197,10 @@ def get_vistis_intervals():
         else:
             if record_id not in visit_class:
                 visit_class[record_id] = {}
-                visit_class[record_id]['record']=deque([days_diff(visits_ini_off[record_id]['init'],visit_date)])
+                visit_class[record_id]['record']=deque([[days_diff(visits_ini_off[record_id]['init'],visit_date),month]])
                 visit_class[record_id]['type'] = visits_ini_off[record_id]['type']
             else:
-                visit_class[record_id]['record'].append(days_diff(visits_ini_off[record_id]['init'],visit_date))
+                visit_class[record_id]['record'].append([days_diff(visits_ini_off[record_id]['init'],visit_date),month])
 
     return visit_class, No_regist_patient
 
@@ -279,10 +280,10 @@ def calculation(current_date, cohort_type):
         covid_end_days = days_diff(visits_ini_off[ID]['init'],covid_interval['end'])
         # Calculate how many days between ID's study initiate and offf date
         study_days = days_diff(visits_ini_off[ID]['init'],visits_ini_off[ID]['off'])
-        # calculate how many weeks(windows) for an individual
+        # calculate how many months(windows) for an individual
         total_weeks = count_total_windows(study_days, visits_ini_off[ID]['type'])
         # If there is no normal visit but initiate visit, force the total_weeks to 1
-        total_weeks = max(1, total_weeks)
+        # total_weeks = max(1, total_weeks)
         # Keep each ID's every month(window) performance
         # individual_visit_record structure is
         # {
@@ -292,10 +293,11 @@ def calculation(current_date, cohort_type):
         individual_visit_record = {}
 
         # If the wanted output id 'Origin'
+        print(ID)
         if visits_ini_off[ID]['type'] == 'origin':
 
             # Go through ID's each week(window)'s number
-            for i in (range(total_weeks)):
+            for i in (range(total_weeks+1)):
                 # initiate record
                 # For 'Origin' ID, the boudary of windows' boundary differs at 24 month
                 if i <=24:
@@ -307,27 +309,33 @@ def calculation(current_date, cohort_type):
                     individual_visit_record[i]["status"] = 'norm'
                     if covid_start_days <= window_begin and window_end <= covid_end_days:
                         individual_visit_record[i]["status"] = 'covid'
-                    # If current analyzing visit is out-window
-                    while visit_class[ID]['record'] and visit_class[ID]['record'][0] < window_begin:
-                        # Because visits before initiate date is not treat as regular visit,
-                        # There is no out-window visit before month 0
-                        if i > 0:
-                            # Record the out-window visit between (n-1)th and (n)th window to (n-1)'s window
-                            individual_visit_record[i-1]["out_window"] +=1
 
-                        # remove out-window visit from the total visits record since is has alreay been counted
+                    if not visit_class[ID]['record']:
+                        continue
+
+                    while i > visit_class[ID]['record'][0][1]:
                         visit_class[ID]['record'].popleft()
-                    # If current analyzing visit is in-window
-                    while visit_class[ID]['record'] and window_begin <= visit_class[ID]['record'][0] <=window_end:
-                        # Only record once if there are multiple in-window visit
-                        if individual_visit_record[i]["in_window"] == 0:
-                            individual_visit_record[i]["in_window"] += 1
-                        # remove other in-window visits in current window
-                        visit_class[ID]['record'].popleft()
-                    # For month 0, all individual has visit as default
+                        if not visit_class[ID]['record']:
+                            break
+                    if not visit_class[ID]['record']:
+                        continue
+
+                    if i < visit_class[ID]['record'][0][1]:
+                        continue
+                    if window_begin <= visit_class[ID]['record'][0][0] <= window_end:
+                        individual_visit_record[i]["in_window"] = 1
+                    else:
+                        if i == 23:
+                            print(ID)
+                            print(visit_class[ID]['record'])
+                        individual_visit_record[i]["out_window"] = 1
+                    # remove current record
+                    visit_class[ID]['record'].popleft()
                     if i == 0:
                         individual_visit_record[i]["in_window"] = 1
                         continue
+                    '''==='''
+
                 # Same treatment for Original ID's month > 30.
                 # The only difference is window's boundary calculation method
                 elif i <=48:
@@ -337,13 +345,26 @@ def calculation(current_date, cohort_type):
                     individual_visit_record[i]["status"] = 'norm'
                     if covid_start_days <= window_begin and window_end <= covid_end_days:
                         individual_visit_record[i]["status"] = 'covid'
-                    while visit_class[ID]['record'] and visit_class[ID]['record'][0] < window_begin:
-                        individual_visit_record[i-1]["out_window"] =individual_visit_record[i-1]["out_window"]+1
+
+                    if not visit_class[ID]['record']:
+                        continue
+
+                    while i > visit_class[ID]['record'][0][1]:
                         visit_class[ID]['record'].popleft()
-                    while visit_class[ID]['record'] and window_begin <= visit_class[ID]['record'][0] <=window_end:
-                        if individual_visit_record[i]["in_window"] == 0:
-                            individual_visit_record[i]["in_window"] += 1
-                        visit_class[ID]['record'].popleft()
+                        if not visit_class[ID]['record']:
+                            break
+                    if not visit_class[ID]['record']:
+                        continue
+
+                    if i < visit_class[ID]['record'][0][1]:
+                        continue
+                    if window_begin <= visit_class[ID]['record'][0][0] <= window_end:
+                        individual_visit_record[i]["in_window"] = 1
+                    else:
+                        individual_visit_record[i]["out_window"] = 1
+                    # remove current record
+                    visit_class[ID]['record'].popleft()
+
 
                 # When month > 48, origin cohort ID requires to visit every 3 month
                 else:
@@ -359,16 +380,24 @@ def calculation(current_date, cohort_type):
                         individual_visit_record[i]["status"] = 'norm'
                         if covid_start_days <= window_begin and window_end <= covid_end_days:
                             individual_visit_record[i]["status"] = 'covid'
-                        # Write down out-window visit to previous window
-                        while visit_class[ID]['record'] and visit_class[ID]['record'][0] < window_begin:
-                            if (i - 3) in individual_visit_record:
-                                individual_visit_record[prev_q]["out_window"] += + 1
-                            visit_class[ID]['record'].popleft()
-                        while visit_class[ID]['record'] and window_begin <= visit_class[ID]['record'][0] <= window_end:
-                            if individual_visit_record[i]["in_window"] == 0:
-                                individual_visit_record[i]["in_window"] += 1
-                            visit_class[ID]['record'].popleft()
+                        if not visit_class[ID]['record']:
+                            continue
 
+                        while i > visit_class[ID]['record'][0][1]:
+                            visit_class[ID]['record'].popleft()
+                            if not visit_class[ID]['record']:
+                                break
+                        if not visit_class[ID]['record']:
+                            continue
+
+                        if i < visit_class[ID]['record'][0][1]:
+                            continue
+                        if window_begin <= visit_class[ID]['record'][0][0] <= window_end:
+                            individual_visit_record[i]["in_window"] = 1
+                        else:
+                            individual_visit_record[i]["out_window"] = 1
+                        # remove current record
+                        visit_class[ID]['record'].popleft()
             visit_count[ID] = individual_visit_record
 
 
@@ -383,15 +412,18 @@ def calculation(current_date, cohort_type):
                     individual_visit_record[i]["status"] = 'norm'
                     if covid_start_days <= window_begin and window_end <= covid_end_days:
                         individual_visit_record[i]["status"] = 'covid'
-
-                    while visit_class[ID]['record'] and visit_class[ID]['record'][0] < window_begin:
-                        if i > 0:
-                            individual_visit_record[i-1]["out_window"] +=1
+                    if not visit_class[ID]['record']:
+                        continue
+                    while i > visit_class[ID]['record'][0][1]:
                         visit_class[ID]['record'].popleft()
-                    while visit_class[ID]['record'] and window_begin <= visit_class[ID]['record'][0] <=window_end:
-                        if individual_visit_record[i]["in_window"] == 0:
-                            individual_visit_record[i]["in_window"] += 1
-                        visit_class[ID]['record'].popleft()
+                    if i < visit_class[ID]['record'][0][1]:
+                        continue
+                    if window_begin <= visit_class[ID]['record'][0][0] <= window_end:
+                        individual_visit_record[i]["in_window"] = 1
+                    else:
+                        individual_visit_record[i]["out_window"] = 1
+                    # remove current record
+                    visit_class[ID]['record'].popleft()
                     if i == 0:
                         individual_visit_record[i]["in_window"] = 1
                         continue
@@ -408,14 +440,18 @@ def calculation(current_date, cohort_type):
                         individual_visit_record[i]["status"] = 'norm'
                         if covid_start_days <= window_begin and window_end <= covid_end_days:
                             individual_visit_record[i]["status"] = 'covid'
-                        while visit_class[ID]['record'] and visit_class[ID]['record'][0] < window_begin:
-                            if (i - 3) in individual_visit_record:
-                                individual_visit_record[prev_q]["out_window"] +=1
+                        if not visit_class[ID]['record']:
+                            continue
+                        while i > visit_class[ID]['record'][0][1]:
                             visit_class[ID]['record'].popleft()
-                        while visit_class[ID]['record'] and window_begin <= visit_class[ID]['record'][0] <=window_end:
-                            if individual_visit_record[i]["in_window"] == 0:
-                                individual_visit_record[i]["in_window"] += 1
-                            visit_class[ID]['record'].popleft()
+                        if i < visit_class[ID]['record'][0][1]:
+                            continue
+                        if window_begin <= visit_class[ID]['record'][0][0] <= window_end:
+                            individual_visit_record[i]["in_window"] = 1
+                        else:
+                            individual_visit_record[i]["out_window"] = 1
+                        # remove current record
+                        visit_class[ID]['record'].popleft()
             # record each ID's all visits records in all their months in visit_count
             visit_count[ID] = individual_visit_record
 
@@ -503,10 +539,15 @@ def count_output(current_time,cohort_type):
     # After count each ID's monthly performance,
     # go through monly performance record again and calculate 'Completed %' and 'In Window %'
     for month in month_count.keys():
+        if month == 0:
+            month_count[month]['Visits Completed'] = month_count[month]['Visits Expected']
+            month_count[month]['Visits Completed In Window'] = month_count[month]['Visits Expected']
         if month_count[month]['Visits Expected'] != 0:
             month_count[month]['Completed %'] = float(month_count[month]['Visits Completed'] * 100 / month_count[month]['Visits Expected'])
-            month_count[month]['In Window %'] = float(month_count[month]['Visits Completed In Window'] *100 / month_count[month]['Visits Expected'])
-
+            if month_count[month]['Visits Completed'] != 0:
+                month_count[month]['In Window %'] = float(month_count[month]['Visits Completed In Window'] *100 / month_count[month]['Visits Completed'])
+            else:
+                month_count[month]['In Window %']
     return month_count, cohort_type
 
 
@@ -537,224 +578,71 @@ def to_excel(month_count, cohort_type):
 
     print(f" Results for '{cohort_type}' cohort successfully written to '{sheet_name}'.")
 
-def check_month_48():
-    # origin = read_xlsx(address, "4_Original Cohort")
-    visits_record = read_xlsx(address,"5_Visit Dates")
-
-    # Sort visits record first by ID and then by month
-    visits_record = visits_record.sort_values(by=['record_id', 'month'])
-    # Get visits_ini_off dictionary
+def judge_visit_window_condition():
     visits_ini_off = get_visits_init_off_dates(address)
-
-    visit_class = {}
-    No_regist_patient = []
+    visits_record = read_xlsx(address, "5_Visit Dates")
+    visits_record["If in Window"] = -1
     for i in range(len(visits_record)):
-        record_id, site, redcap_event_name, visit_date,  month = visits_record.iloc[i]
+        if np.isnan(visits_record.loc[i,"month"]):
+            continue
+        if int(visits_record.loc[i,"month"]) < 0:
+            visits_record.loc[i, "If in Window"] = -1
+            continue
+        record_id = visits_record.loc[i,"record_id"]
+        cur_date = visits_record.loc[i,"visit_date"]
+        month = visits_record.loc[i,"month"]
+        date_diff = days_diff(visits_ini_off[record_id]['init'],cur_date)
 
-        # In 5_Visit Dates table, some records' month missing unregular visit which is not included in calculation
-        # Some records' month less than 0 means visit before initiate date which is not included in calculation
-        # Some records' month is 0 refers initiate date. However, not all patients have initiate date record.
-        # Therefore, use visits_ini_off from Orignial and new cohort table to get patient's initiate study date
-        # Make sure ID has cohort info in 4_Original Cohort or 4_ New Cohort
+        # visits_ini_off : dict
+        #     {
+        #         'ID': {
+        #             'init': <Timestamp>,
+        #             'off' : <Timestamp>,
+        #             'type': 'origin' or 'new'
+        #         }
+        #     }
         if record_id not in visits_ini_off:
             continue
-        # Make sure all scheduled visit happens after initiate date
-        if days_diff(visits_ini_off[record_id]['init'], visit_date) < 0:
-            continue
+        if visits_ini_off[record_id]['type'] == 'origin':
+            if month <= 24:
+                # calculate each window begin and end day
+                window_begin = (month) * 28 - 7
+                window_end = (month) * 31 + 7
 
-        # Remove unschedule visit
-        event = str(redcap_event_name).strip().lower() if pd.notnull(redcap_event_name) else ""
-        allowed_prefixes = ("form_", "month_", "quarter_", "visit_month_","hydroxyurea_initat_arm_","month_0_hu_initiat_arm_")
-
-        if not any(event.startswith(prefix) for prefix in allowed_prefixes):
-            continue
-
-        if record_id not in visits_ini_off.keys():
-            No_regist_patient.append(record_id)
+                if window_begin <= date_diff and  date_diff <= window_end:
+                    visits_record.loc[i, "If in Window"] = 1
+                else:
+                    visits_record.loc[i, "If in Window"] = 0
+            # Same treatment for Original ID's month > 24.
+            # The only difference is window's boundary calculation method
+            else:
+                window_begin = (month) * 28 - 14
+                window_end = (month) * 31 + 14
+                if window_begin <= date_diff and  date_diff <= window_end:
+                    visits_record.loc[i, "If in Window"] = 1
+                else:
+                    visits_record.loc[i, "If in Window"] = 0
+        # Same treatment for New ID's
+        # The only difference is window's boundary calculation method
         else:
-            if ('48_start' not in visits_ini_off[record_id]) and ('48_end' not in visits_ini_off[record_id]):
-                visits_ini_off[record_id]['48_start'] = visits_ini_off[record_id]['init'] + pd.to_timedelta(1330,unit="D")
-                visits_ini_off[record_id]['48_end'] = visits_ini_off[record_id]['init'] + pd.to_timedelta(1502, unit="D")
-            if 1330<= days_diff(visits_ini_off[record_id]['init'],visit_date) <= 1502 :
-                if ('48_visits' not in visits_ini_off[record_id]):
-                    visits_ini_off[record_id]['48_visits'] = []
-                    visits_ini_off[record_id]['48_visits'].append(visit_date)
+            if month <= 6:
+                window_begin = (month) * 30 - 7
+                window_end = (month) * 30 + 7
+                if window_begin <= date_diff and  date_diff <= window_end:
+                    visits_record.loc[i, "If in Window"] = 1
                 else:
-                    visits_ini_off[record_id]['48_visits'].append(visit_date)
-
-    output_rows = []
-    for record_id, info in visits_ini_off.items():
-        output_rows.append({
-            'record_id': record_id,
-            'cohort_type': info.get('type'),
-            'init_date': info.get('init'),
-            'off_date': info.get('off'),
-            '48_start': info.get('48_start'),
-            '48_end': info.get('48_end'),
-            '48_visit_count': len(info.get('48_visits', [])),
-            '48_visit_dates': ", ".join([str(v.date()) for v in info.get('48_visits', [])])
-        })
-
-    df_48 = pd.DataFrame(output_rows)
-
-    with pd.ExcelWriter(address, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-        df_48.to_excel(writer, sheet_name='48 month', index=False)
-
-    print("✅ Month 48 summary exported to sheet '48 month'.")
-
-
-
-def list_all_window_visit(current_date, cohort_type):
-    """
-    Build visit windows for each participant and mark visits as in/out-of-window.
-    Includes COVID-19 pause handling and off-study truncation.
-
-    Parameters
-    ----------
-    current_time : str
-        Date string (e.g., '9/30/2025') used as analysis cutoff if off-study missing.
-    cohort_type : str
-        'origin' or 'new'
-
-    :return: visit_count for each ID's each month's visit count according to 'new' or 'origin' cohort
-    """
-    # Get visits_ini_off dictionary
-    visits_ini_off = get_visits_init_off_dates(address)
-    # Get each patient visit's date from intiate study date.
-    visit_class, No_regist_patient = get_vistis_intervals()
-    # Keep covid start and end date in dictionary
-    covid_interval = {"start": pd.to_datetime("3/1/2020"), "end": pd.to_datetime("1/1/2024")}
-
-    # Keep each month's each individuals individual_visit_record in dictionary
-    # The structure of visit_count is
-    # {
-    #   ID_1:{
-    #           month_1:{"in_window":in_window, "out_window": out_window,"status": "status"},
-    #           month_2:{"in_window":in_window, "out_window": out_window,"status": "status"}
-    #           ...},
-    #   ID_2:{
-    #           month_1:{"in_window":in_window, "out_window": out_window,"status": "status"},
-    #           month_2:{"in_window":in_window, "out_window": out_window,"status": "status"}
-    #           ...},...
-    # }
-    visit_count = {}
-    for ID in visits_ini_off.keys():
-        # If there is not visit record in 5_Visit Dates
-        # or ID belongs to the type which we do not expect. Then skip
-        if ID not in visit_class.keys() or visits_ini_off[ID]['type'] != cohort_type:
-            continue
-
-        # If there is no off study date for an individual, then set a current for their off study date
-        if pd.isnull(visits_ini_off[ID]['off']):
-            visits_ini_off[ID]['off'] = pd.to_datetime(current_date)
-
-        # Calculate how many days between covid start date and ID's study initiate date, might be nefative
-        covid_start_days = days_diff(visits_ini_off[ID]['init'], covid_interval['start'])
-        # Calculate how many days between covid end date and ID's study off date, might be nefative
-        covid_end_days = days_diff(visits_ini_off[ID]['init'], covid_interval['end'])
-        # Calculate how many days between ID's study initiate and offf date
-        study_days = days_diff(visits_ini_off[ID]['init'], visits_ini_off[ID]['off'])
-        # calculate how many weeks(windows) for an individual
-        total_weeks = count_total_windows(study_days, visits_ini_off[ID]['type'])
-        # If there is no normal visit but initiate visit, force the total_weeks to 1
-        total_weeks = max(1, total_weeks)
-        # Keep each ID's every month(window) performance
-        # individual_visit_record structure is
-        # {
-        #   month_1:{"in_window":in_window, "out_window": out_window,"status": "status"},
-        #   month_2:{"in_window":in_window, "out_window": out_window,"status": "status"}
-        #   ...},
-        individual_visit_record = {}
-
-
-
-
-        # If the wanted output id 'Origin'
-        if visits_ini_off[ID]['type'] == 'origin':
-
-            # Go through ID's each week(window)'s number
-            for i in (range(total_weeks)):
-                # initiate record
-                # For 'Origin' ID, the boudary of windows' boundary differs at 24 month
-                if i <= 24:
-                    individual_visit_record[i] = {"in_window": [], "out_window": [], "status": ''}
-                    # calculate each window begin and end day
-                    window_begin = (i) * 28 - 7
-                    window_end = (i) * 31 + 7
-                    # Determine if the window completely belongs to 'covid' period and mark windows
-                    individual_visit_record[i]["status"] = 'norm'
-                    if covid_start_days <= window_begin and window_end <= covid_end_days:
-                        individual_visit_record[i]["status"] = 'covid'
-                    # If current analyzing visit is out-window
-                    while visit_class[ID]['record'] and visit_class[ID]['record'][0] < window_begin:
-                        # Because visits before initiate date is not treat as regular visit,
-                        # There is no out-window visit before month 0
-                        if i > 0:
-                            # Record the out-window visit between (n-1)th and (n)th window to (n-1)'s window
-                            # visit_class : {ID: {"record": deque([days_since_init]), "type": cohort_type}}
-
-                            individual_visit_record[i - 1]["out_window"].append(visits_ini_off[ID]['init'] + pd.to_timedelta(visit_class[ID]['record'][0], unit="D"))
-
-                        # remove out-window visit from the total visits record since is has alreay been counted
-                        visit_class[ID]['record'].popleft()
-                    # If current analyzing visit is in-window
-                    while visit_class[ID]['record'] and window_begin <= visit_class[ID]['record'][0] <= window_end:
-                        individual_visit_record[i]["in_window"].append(visits_ini_off[ID]['init'] + pd.to_timedelta(visit_class[ID]['record'][0], unit="D"))
-                        visit_class[ID]['record'].popleft()
-                    # For month 0, all individual has visit as default
-                    if i == 0:
-                        individual_visit_record[i]["in_window"].append(visits_ini_off[ID]['init'])
-                        continue
-                # Same treatment for Original ID's month > 30.
-                # The only difference is window's boundary calculation method
-                elif i <= 48:
-                    individual_visit_record[i] = {"in_window": [], "out_window": [], "status": ''}
-                    window_begin = (i) * 28 - 14
-                    window_end = (i) * 31 + 14
-                    individual_visit_record[i]["status"] = 'norm'
-                    if covid_start_days <= window_begin and window_end <= covid_end_days:
-                        individual_visit_record[i]["status"] = 'covid'
-                    while visit_class[ID]['record'] and visit_class[ID]['record'][0] < window_begin:
-                        individual_visit_record[i - 1]["out_window"].append(
-                            visits_ini_off[ID]['init'] + pd.to_timedelta(visit_class[ID]['record'][0], unit="D"))
-                        visit_class[ID]['record'].popleft()
-                    while visit_class[ID]['record'] and window_begin <= visit_class[ID]['record'][0] <= window_end:
-                        individual_visit_record[i]["in_window"].append(
-                            visits_ini_off[ID]['init'] + pd.to_timedelta(visit_class[ID]['record'][0], unit="D"))
-                        visit_class[ID]['record'].popleft()
-
-                # When month > 48, origin cohort ID requires to visit every 3 month
+                    visits_record.loc[i, "If in Window"] = 0
+            else:
+                window_begin = month * 30 - 14
+                window_end = month * 30 + 14
+                if window_begin <= date_diff and  date_diff <= window_end:
+                    visits_record.loc[i, "If in Window"] = 1
                 else:
-                    # If the month > 48, before the required visit month(51, 54...), skip these month. eg. 49, 50, 52, 53...
-                    if (i % 3) != 0:
-                        continue
-                    else:
-                        individual_visit_record[i] = {"in_window": [], "out_window": [], "status": ''}
-                        # write down previous window's month
-                        prev_q = i - 3
-                        window_begin = (i) * 28 - 14
-                        window_end = (i) * 31 + 14
-                        individual_visit_record[i]["status"] = 'norm'
-                        if covid_start_days <= window_begin and window_end <= covid_end_days:
-                            individual_visit_record[i]["status"] = 'covid'
-                        # Write down out-window visit to previous window
-                        while visit_class[ID]['record'] and visit_class[ID]['record'][0] < window_begin:
-                            if (i - 3) in individual_visit_record:
-                                individual_visit_record[prev_q]["out_window"].append(
-                                    visits_ini_off[ID]['init'] + pd.to_timedelta(visit_class[ID]['record'][0],
-                                                                                 unit="D"))
-                            visit_class[ID]['record'].popleft()
-                        while visit_class[ID]['record'] and window_begin <= visit_class[ID]['record'][
-                            0] <= window_end:
-                            individual_visit_record[i]["in_window"].append(
-                                visits_ini_off[ID]['init'] + pd.to_timedelta(visit_class[ID]['record'][0],
-                                                                             unit="D"))
-                            visit_class[ID]['record'].popleft()
+                    visits_record.loc[i, "If in Window"] = 0
+    print(visits_record)
+    with pd.ExcelWriter(address, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+        visits_record.to_excel(writer, sheet_name="5_Visit Dates", index=False)
 
-            visit_count[ID] = individual_visit_record
-
-    list_visit_count = visit_count
-    return list_visit_count
 
 
 def export_visit_count_table(visit_count, visits_ini_off, cohort_type):
@@ -809,10 +697,26 @@ if __name__ == "__main__":
     #     month_count, cohort = count_output("10/13/2025", c)
     #     to_excel(month_count, cohort)
 
+    # print(count_output("10/13/2025", 'new'))
 
-    # check_month_48()
-    list_visit_count = list_all_window_visit("10/13/2025", 'origin')
-    visits_ini_off = get_visits_init_off_dates(address)
-    export_visit_count_table(list_visit_count,visits_ini_off,'origin')
+    # a,b = get_vistis_intervals()
+    # print(a['01-023'])
+
+    # a = calculation("10/13/2025", 'origin')
+    # print(a['01-023'])
+    # for id in a.keys():
+    #     # print(id)
+    #     for month in a[id].keys():
+    #         if month == 1:
+    #             if a[id][month]["in_window"]!= 0 or a[id][month]["out_window"]!= 0:
+    #                 print(id)
+
+
+
+    # # check_month_48()
+    # list_visit_count = list_all_window_visit("10/13/2025", 'origin')
+    # visits_ini_off = get_visits_init_off_dates(address)
+    # export_visit_count_table(list_visit_count,visits_ini_off,'origin')
+    judge_visit_window_condition()
 
 
