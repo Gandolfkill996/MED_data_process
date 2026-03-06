@@ -201,7 +201,7 @@ def get_vistis_intervals():
                 visit_class[record_id]['type'] = visits_ini_off[record_id]['type']
             else:
                 visit_class[record_id]['record'].append([days_diff(visits_ini_off[record_id]['init'],visit_date),month])
-
+    # print(visit_class['02/217']['record'])
     return visit_class, No_regist_patient
 
 
@@ -313,7 +313,7 @@ def calculation(current_date, cohort_type):
                     if not visit_class[ID]['record']:
                         continue
 
-                    while i > visit_class[ID]['record'][0][1]:
+                    while visit_class[ID]['record'] and i > visit_class[ID]['record'][0][1]:
                         visit_class[ID]['record'].popleft()
                         if not visit_class[ID]['record']:
                             break
@@ -349,7 +349,7 @@ def calculation(current_date, cohort_type):
                     if not visit_class[ID]['record']:
                         continue
 
-                    while i > visit_class[ID]['record'][0][1]:
+                    while visit_class[ID]['record'] and i > visit_class[ID]['record'][0][1]:
                         visit_class[ID]['record'].popleft()
                         if not visit_class[ID]['record']:
                             break
@@ -383,7 +383,7 @@ def calculation(current_date, cohort_type):
                         if not visit_class[ID]['record']:
                             continue
 
-                        while i > visit_class[ID]['record'][0][1]:
+                        while visit_class[ID]['record'] and i > visit_class[ID]['record'][0][1]:
                             visit_class[ID]['record'].popleft()
                             if not visit_class[ID]['record']:
                                 break
@@ -414,7 +414,7 @@ def calculation(current_date, cohort_type):
                         individual_visit_record[i]["status"] = 'covid'
                     if not visit_class[ID]['record']:
                         continue
-                    while i > visit_class[ID]['record'][0][1]:
+                    while visit_class[ID]['record'] and i > visit_class[ID]['record'][0][1]:
                         visit_class[ID]['record'].popleft()
                     if i < visit_class[ID]['record'][0][1]:
                         continue
@@ -442,7 +442,7 @@ def calculation(current_date, cohort_type):
                             individual_visit_record[i]["status"] = 'covid'
                         if not visit_class[ID]['record']:
                             continue
-                        while i > visit_class[ID]['record'][0][1]:
+                        while visit_class[ID]['record'] and i > visit_class[ID]['record'][0][1]:
                             visit_class[ID]['record'].popleft()
                         if i < visit_class[ID]['record'][0][1]:
                             continue
